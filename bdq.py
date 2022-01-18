@@ -32,7 +32,7 @@ class Network(nn.Module):
         self.actions = actions
 
         # Shared part of the Network
-        shared_modules = nn.ModuleList()
+        shared_modules = []
 
         shared_modules.append(nn.Linear(state, shared[0]))
         shared_modules.append(nn.LeakyReLU(0.1))
@@ -44,7 +44,7 @@ class Network(nn.Module):
         self.shared_stack = nn.Sequential(*shared_modules)
 
         # State-Value branch
-        value_modules = nn.ModuleList()
+        value_modules = []
 
         value_modules.append(nn.Linear(shared[-1], branch[0]))
         value_modules.append(nn.LeakyReLU(0.1))
@@ -58,10 +58,10 @@ class Network(nn.Module):
         self.value_stack = nn.Sequential(*value_modules)
 
         # Advantage branches
-        self.branch_stacks = []
+        self.branch_stacks = nn.ModuleList()
 
         for i in range(len(actions)):
-            branch_modules = nn.ModuleList()
+            branch_modules = []
 
             branch_modules.append(nn.Linear(shared[-1], branch[0]))
             branch_modules.append(nn.LeakyReLU(0.1))
@@ -90,7 +90,7 @@ class Network(nn.Module):
 
             # Q-Value Aggregation
             value_output_exp = value_output.expand_as(branch_output)
-            action_output = value_output_exp + branch_output - branch_output.mean(1, keepdim=True).expand_as(branch_output)
+            action_output = value_output_exp + branch_output - branch_output.mean(-1, keepdim=True).expand_as(branch_output)
             action_outputs.append(action_output)  # The Q-Values
         
         return action_outputs
@@ -99,11 +99,15 @@ class ReplayBuffer:
     """
     Prioritizing Replay Buffer
     """
-    def __init__(self, max_len, state_dim, alpha=0.6, beta=0.1, beta_increase_steps=20000):
-        self.states = np.empty((max_len, state_dim), dtype=np.float32)
-        self.actions = np.empty(max_len, dtype=np.int16)
+    def __init__(self, state, actions, max_len=50000, alpha=0.6, beta=0.1, beta_increase_steps=20000):
+        """
+        state: Dimension of State
+        actions: Number of Actions
+        """
+        self.states = np.empty((max_len, state), dtype=np.float32)
+        self.actions = np.empty((max_len, actions), dtype=np.int16)
         self.rewards = np.empty(max_len, dtype=np.float32)
-        self.next_states = np.empty((max_len, state_dim), dtype=np.float32)
+        self.next_states = np.empty((max_len, state), dtype=np.float32)
         self.terminals = np.empty(max_len, dtype=np.int8)
         self.errors = np.empty(max_len, dtype=np.float32)  # The Q-Network temporal difference error used for training
         self.weights = np.empty(max_len, dtype=np.float32)  # Weights for gradient descend bias correction
@@ -116,16 +120,16 @@ class ReplayBuffer:
         self.probs_updated = False  # Indicates whether probabilities have to be recalculated
         self.alpha = alpha  # Blend between uniform distribution (alpha = 0) and Probabilities according to rank (alpha = 1)
         self.beta = beta  # Blend between full bias correction (beta = 1) and no bias correction (beta = 0)
-        self.beta_increase = (1.0 - beta) / beta_increase_steps  # Adder to reach 1 within given amoutn of steps
+        self.beta_increase = (1.0 - beta) / beta_increase_steps  # Adder to linearly reach 1 within given amount of steps
     
-    def store_experience(self, state, action, reward, next_state, terminal):
+    def store_experience(self, state, actions, reward, next_state, terminal):
         """
         Stores given SARS Experience in the Replay Buffer.
         Returns True if the last element has been written into memory and
         it will start over replacing the first elements at the next call.
         """
         self.states[self.index] = state
-        self.actions[self.index] = action
+        self.actions[self.index] = actions
         self.rewards[self.index] = reward
         self.next_states[self.index] = next_state
         self.terminals[self.index] = terminal
@@ -142,17 +146,23 @@ class ReplayBuffer:
         return False
     
     def update_experiences(self, indices, errors):
+        """
+        Update TD Errors for elements given by indices. Should be called after they have
+        been replayed and new errors were calculated. Errors have to be input as absolute values.
+        """
         self.errors[indices] = errors
         self.probs_updated = False
 
     def get_experiences(self, batch_size):
+        """
+        Returns batch of experiences for replay.
+        """
         buff_len = self.__len__()
         
         if not self.probs_updated:
-            abs_errors = np.abs(self.errors[:buff_len])
-            sorted_indices = abs_errors.argsort()[::-1]  # Indices from highest to lowest error
-            ranks = np.arange(buff_len)[sorted_indices] + 1.0
-            scaled_priorities = (1.0 / ranks)**self.alpha
+            sorted_indices = self.errors[:buff_len].argsort()[::-1]  # Indices from highest to lowest error
+            ranks = np.arange(buff_len)[sorted_indices] + 1
+            scaled_priorities = (1 / ranks)**self.alpha
             
             self.probabilities[:buff_len] = scaled_priorities / scaled_priorities.sum()
             unnormed_weights = (self.probabilities[:buff_len] * buff_len)**-self.beta
@@ -165,12 +175,12 @@ class ReplayBuffer:
 
         indices = self.rng.choice(np.arange(buff_len), batch_size, p=self.probabilities[:buff_len])
 
-        weights = np.array([self.weights[i] for i in indices], dtype=np.float32)
-        states = np.array([self.states[i] for i in indices], dtype=np.float32)
-        actions = np.array([self.actions[i] for i in indices], dtype=np.int16)
-        rewards = np.array([self.rewards[i] for i in indices], dtype=np.float32)
-        next_states = np.array([self.next_states[i] for i in indices], dtype=np.float32)
-        terminals = np.array([self.terminals[i] for i in indices], dtype=np.int8)
+        weights = self.weights[indices]
+        states = self.states[indices]
+        actions = self.actions[indices]
+        rewards = self.rewards[indices]
+        next_states = self.next_states[indices]
+        terminals = self.terminals[indices]
 
         return indices, weights, states, actions, rewards, next_states, terminals
 
@@ -312,12 +322,12 @@ class BDQ:
         for _ in range(self.replays):
             indices, weights, states, actions, rewards, next_states, terminals = self.buffer.get_experiences(self.batch_size)
 
-            weights = tensor(weights, device=self.device, dtype=torch.float32)
-            states = tensor(states, device=self.device, dtype=torch.float32)
-            rewards = tensor(rewards, device=self.device, dtype=torch.float32)
-            actions = tensor(actions, device=self.device, dtype=torch.int64)
-            next_states = tensor(next_states, device=self.device, dtype=torch.float32)
-            terminals = tensor(terminals, device=self.device, dtype=torch.int8)
+            weights = torch.from_numpy(weights).to(self.device)
+            states = torch.from_numpy(states).to(self.device)
+            rewards = torch.from_numpy(rewards).to(self.device)
+            actions = torch.from_numpy(actions).to(self.device)
+            next_states = torch.from_numpy(next_states).to(self.device)
+            terminals = torch.from_numpy(terminals).to(self.device)
 
             with torch.no_grad():
                 max_actions = self.q_net(next_states).argmax(1).unsqueeze(1)
