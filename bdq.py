@@ -188,25 +188,25 @@ class ReplayBuffer:
         return self.max_len if self.full else self.index
 
 class BDQ:
-    def __init__(self, state_dim, action_num, hidden_layers=(500, 500, 500), gamma=0.99, learning_rate_start=0.0005,
-                 learning_rate_decay_steps=50000, learning_rate_min=0.0003, weight_decay=0.001, epsilon_start=1.0, epsilon_decay_steps=20000,
-                 epsilon_min=0.1, temp_start=10, temp_decay_steps=20000, temp_min=0.1, buffer_size_min=200,
-                 buffer_size_max=50000, batch_size=50, replays=1, tau=0.01, alpha=0.6, beta=0.1, beta_increase_steps=20000, device='cpu'):
+    def __init__(self, state, actions, shared=(512, 512), branch=(128, 128), gamma=0.99, learning_rate=0.0005,
+                 weight_decay=0.001, epsilon_start=1.0, epsilon_decay_steps=20000,
+                 epsilon_min=0.1, buffer_size_max=50000, buffer_size_min=200,
+                 batch_size=50, replays=1, tau=0.01, alpha=0.6, beta=0.1, beta_increase_steps=20000, device='cpu'):
 
-        self.state_dim = state_dim
-        self.action_num = action_num
-        self.hidden_layers = hidden_layers
-        layers = (state_dim, *hidden_layers, action_num)  # 3 hidden layers of sizes 500, 500 and 500
-        self.q_net = Network(layers, device).to(device)
-        self.target_q_net = Network(layers, device).to(device)
+        self.state = state
+        self.actions = actions
+        self.shared = shared
+        self.branch = branch
+        self.q_net = Network(state, actions, shared, branch).to(device)
+        self.target_q_net = Network(state, actions, shared, branch).to(device)
         self._update_target(1.0)  # Fully copy Online Net weights to Target Net
 
-        self.optimizer = torch.optim.RMSprop(self.q_net.parameters(),  # Using RMSProp because it's more stable than Adam
-                                             lr=learning_rate_start, weight_decay=weight_decay)
+        self.optimizer = torch.optim.RMSprop(self.q_net.parameters(),  # Using RMSProp because it's more stable, not as aggressive than Adam
+                                             lr=learning_rate, weight_decay=weight_decay)
         self.weight_decay = weight_decay
         self.loss_function = nn.HuberLoss()
 
-        self.buffer = ReplayBuffer(buffer_size_max, state_dim, alpha, beta, beta_increase_steps)
+        self.buffer = ReplayBuffer(buffer_size_max, state, alpha, beta, beta_increase_steps)
         self.buffer_size_max = buffer_size_max
         self.buffer_size_min = buffer_size_min
         self.batch_size = batch_size
@@ -218,22 +218,12 @@ class BDQ:
         self.gamma = gamma  # Reward discount rate
 
         # Linearly decay Learning Rate and Epsilon from start to min in a given amount of steps
-        self.learning_rate = learning_rate_start
-        self.learning_rate_start = learning_rate_start
-        self.learning_rate_decay = (learning_rate_start - learning_rate_min) / learning_rate_decay_steps
-        self.learning_rate_min = learning_rate_min
+        self.learning_rate = learning_rate
 
         self.epsilon = epsilon_start
         self.epsilon_start = epsilon_start
         self.epsilon_decay = (epsilon_start - epsilon_min) / epsilon_decay_steps
         self.epsilon_min = epsilon_min
-
-        # Temperature for Softmax
-        self.temp = temp_start
-        self.temp_start = temp_start
-        # Decay rate is the base which leads to decaying exponentially from start to min in given steps
-        self.temp_decay_rate = (temp_min/temp_start)**(1/temp_decay_steps)
-        self.temp_min = temp_min
 
         self.tau = tau  # Mixing parameter for polyak averaging
 
@@ -245,72 +235,53 @@ class BDQ:
         """
         Reset object to its initial state if you want to do multiple training passes with it
         """
-        layers = (self.state_dim, *(self.hidden_layers), self.action_num)  # 3 hidden layers of sizes 500, 500 and 500
-        self.q_net = Network(layers, self.device).to(self.device)
-        self.target_q_net = Network(layers, self.device).to(self.device)
+        self.q_net = Network(self.state, self.actions, self.shared, self.branch).to(self.device)
+        self.target_q_net = Network(self.state, self.actions, self.shared, self.branch).to(self.device)
         self._update_target(1.0)  # Fully copy Online Net weights to Target Net
 
-        self.optimizer = torch.optim.RMSprop(self.q_net.parameters(), lr=self.learning_rate_start, weight_decay=self.weight_decay)
-        self.loss_function = nn.HuberLoss()
+        self.optimizer = torch.optim.RMSprop(self.q_net.parameters(), lr=self.learning_rate, weight_decay=self.weight_decay)
 
         self.buffer = ReplayBuffer(self.buffer_size_max, self.state_dim, self.alpha, self.beta, self.beta_increase_steps)
 
-        self.learning_rate = self.learning_rate_start
         self.epsilon = self.epsilon_start
-        self.temp = self.temp_start
     
-    def act_e_greedy(self, state):
+    def act(self, state):
         """
         Decides on action based on current state using epsilon-greedy Policy.
         """
-        with torch.no_grad():
-            state = tensor(state, device=self.device, dtype=torch.float32).unsqueeze(0)
-            Q = self.q_net(state).squeeze()
-            greedy_action = Q.argmax().item()
-
         if self.rng.random() < self.epsilon:
-            action = self.rng.integers(self.action_num)  # Random
+            actions = self.rng.integers(self.actions, dtype=np.int16)  # Random
         else:
-            action = greedy_action  # Greedy
-        
-        is_greedy = action == greedy_action
+            state = tensor(state, device=self.device, dtype=torch.float32).unsqueeze(0)
+            qs = self.q_net(state).detach()
 
-        return action, is_greedy
-    
-    def act_softmax(self, state):
-        """
-        Transform Value function to Softmax probability distribution and sample from it randomly.
-        """
-        state = tensor(state, device=self.device, dtype=torch.float32).unsqueeze(0)
-        Q = self.q_net(state).detach().squeeze()
-        temp_Q = Q / self.temp
-        norm_Q = temp_Q - temp_Q.max().expand_as(temp_Q)  # Normalize for numerical stability
+            actions = np.empty(len(self.actions), dtype=np.int16)
+            for i, q in enumerate(qs):
+                actions[i] = q.unsqueeze(0).argmax().item()  # Greedy
 
-        pi = norm_Q.exp() / norm_Q.exp().sum()
-        pi = pi.cpu().numpy()
+        return actions
 
-        action = self.rng.choice(np.arange(len(pi)), size=1, p=pi).item()
-        is_greedy = action == Q.argmax().item()
-
-        return action, is_greedy
-
-    def act_greedily(self, state):
+    def act_optimally(self, state):
         """
         Decides on action based on current state using greedy Policy.
         """
-        with torch.no_grad():
-            state = tensor(state, device=self.device, dtype=torch.float32).unsqueeze(0)
-            Q = self.q_net(state).squeeze()
-            action = Q.argmax().item()
-        return action, True
+        state = tensor(state, device=self.device, dtype=torch.float32).unsqueeze(0)
+        qs = self.q_net(state).detach()
+
+        actions = np.empty(len(self.actions), dtype=np.int16)
+        for i, q in enumerate(qs):
+            actions[i] = q.unsqueeze(0).argmax().item()
+
+        return actions
     
     def experience(self, state, action, reward, next_state, terminal):
         """
         Takes experience and stores it for replay.
         """
         if self.buffer.store_experience(state, action, reward, next_state, terminal):
-            self.epsilon = self.epsilon_start  # Reset exploration rate when Replay Buffer is full to always have
-            self.temp = self.temp_start        # negative Experiences in storage. Will prevent catastrophic forgetting
+            # Reset exploration rate when Replay Buffer is full to always have
+            # negative Experiences in storage. Will prevent catastrophic forgetting
+            self.epsilon = self.epsilon_start  
     
     def train(self):
         """
@@ -329,20 +300,41 @@ class BDQ:
             next_states = torch.from_numpy(next_states).to(self.device)
             terminals = torch.from_numpy(terminals).to(self.device)
 
-            with torch.no_grad():
-                max_actions = self.q_net(next_states).argmax(1).unsqueeze(1)
-                max_action_vals = self.target_q_net(next_states).gather(1, max_actions).squeeze()
+            qs = self.q_net(next_states).detach()
+            target_qs = self.target_q_net(next_states).detach()
 
-            targets = rewards + self.gamma * max_action_vals * (1 - terminals)
-            predictions = self.q_net(states).gather(1, actions.unsqueeze(1)).squeeze()
-            loss = self.loss_function(weights*predictions, weights*targets)  # Huber Loss with bias correction using weights
+            target_qs = torch.empty((self.batch_size, len(self.actions)), device=self.device, dtype=torch.float32)
+            for i, (q, target_q) in enumerate(zip(qs, target_qs)):
+                max_actions = q.argmax(-1).unsqueeze(-1)
+                max_action_qs = target_q.gather(-1, max_actions).squeeze()
+                target_qs[:, i] = max_action_qs
 
-            errors = (targets - predictions).detach().cpu().numpy()
-            self.buffer.update_experiences(indices, errors)  # Update replay buffer's temporal difference errors
+            mean_target_qs = target_qs.mean(-1)  # One Target for each 
+            targets = rewards + self.gamma * mean_target_qs * (1 - terminals)
+
+            qs = self.q_net(states).gather(-1, actions.unsqueeze(1)).squeeze()
+            predictions = torch.empty((self.batch_size, len(self.actions)), device=self.device, dtype=torch.float32)
+            for i, q in enumerate(qs):
+                prediction = q.gather(-1, actions.unsqueeze(1)).squeeze()
+                predictions[:, i] = prediction
+
+            td_errors = targets.unsqueeze(1).expand_as(predictions) - predictions
+            weighted_td_errors = weights.unsqueeze(1).expand_as(td_errors) * td_errors  # PER Bias correction
+            loss = weighted_td_errors.pow(2).mean()  # Square Loss like in Paper
 
             self.optimizer.zero_grad()
             loss.backward()
+
+            # Gradient Rescaling of Shared Network part because all branches propagate gradients back through it
+            for i, param in enumerate(self.q_net.parameters()):
+                if i < len(self.shared) * 2:
+                    param.grad /= len(actions) + 1
+
             self.optimizer.step()
+
+            errors = td_errors.detach().abs().sum(-1).cpu().numpy()  # Sum of absolute TD Errors used for Replay Prioritization
+            self.buffer.update_experiences(indices, errors)  # Update replay buffer's temporal difference errors
+
 
         self._update_parameters()
         self._update_target(self.tau)
@@ -356,7 +348,7 @@ class BDQ:
     
     def _update_target(self, tau):
         """
-        Update Target Network by blending Target und Online Network weights using the factor tau.
+        Update Target Network by blending Target und Online Network weights using the factor tau (Polyak Averaging)
         A tau of 1 just copies the whole online network over to the target network
         """
         for param, target_param in zip(self.q_net.parameters(), self.target_q_net.parameters()):
@@ -364,15 +356,7 @@ class BDQ:
     
     def _update_parameters(self):
         """
-        Decays parameters like learning rate and epsilon one step
+        Decay epsilon
         """
-        self.learning_rate -= self.learning_rate_decay
-        self.learning_rate = max(self.learning_rate, self.learning_rate_min)
-
-        self.optimizer.param_groups[0]['lr'] = self.learning_rate
-
         self.epsilon -= self.epsilon_decay
         self.epsilon = max(self.epsilon, self.epsilon_min)
-
-        self.temp *= self.temp_decay_rate
-        self.temp = max(self.temp, self.temp_min)
