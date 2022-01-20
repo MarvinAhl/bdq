@@ -2,6 +2,7 @@ import torch
 from torch import tensor
 from bdq import Network
 from bdq import ReplayBuffer
+from bdq import BDQ
 
 """
 net = Network(2, (2, 2), shared=(2, 2), branch=[2])
@@ -33,7 +34,7 @@ for i, param in enumerate(net.parameters()):
 #print(net)
 pass
 """
-
+"""
 buffer = ReplayBuffer(2, 2, max_len=10, beta_increase_steps=10)
 buffer.store_experience([0.1, 0.2], [0, 1], 0.0, [0.2, 0.3], 0)
 buffer.store_experience([0.2, 0.2], [5, 4], 0.0, [0.2, 0.3], 0)
@@ -44,3 +45,11 @@ indices, weights, states, actions, rewards, next_states, terminals = buffer.get_
 length = len(buffer)
 
 pass
+"""
+
+agent = BDQ(2, (2, 2), (2, 2), (2, 2), batch_size=3, buffer_size_min=1, device='cuda')
+agent.reset()
+agent.experience([0.1, 0.2], [0, 1], 0.0, [0.2, 0.3], 0)
+actions1 = agent.act([0.1, 0.2])
+actions2 = agent.act_optimally([0.1, 0.2])
+agent.train()

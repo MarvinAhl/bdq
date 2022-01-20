@@ -105,7 +105,7 @@ class ReplayBuffer:
         actions: Number of Actions
         """
         self.states = np.empty((max_len, state), dtype=np.float32)
-        self.actions = np.empty((max_len, actions), dtype=np.int16)
+        self.actions = np.empty((max_len, actions), dtype=np.int64)
         self.rewards = np.empty(max_len, dtype=np.float32)
         self.next_states = np.empty((max_len, state), dtype=np.float32)
         self.terminals = np.empty(max_len, dtype=np.int8)
@@ -189,10 +189,13 @@ class ReplayBuffer:
 
 class BDQ:
     def __init__(self, state, actions, shared=(512, 512), branch=(128, 128), gamma=0.99, learning_rate=0.0005,
-                 weight_decay=0.001, epsilon_start=1.0, epsilon_decay_steps=20000,
-                 epsilon_min=0.1, buffer_size_max=50000, buffer_size_min=200,
-                 batch_size=50, replays=1, tau=0.01, alpha=0.6, beta=0.1, beta_increase_steps=20000, device='cpu'):
-
+                 weight_decay=0.0001, epsilon_start=1.0, epsilon_decay_steps=20000,
+                 epsilon_min=0.1, buffer_size_max=50000, buffer_size_min=1000,
+                 batch_size=50, replays=1, tau=0.01, alpha=0.6, beta=0.1, beta_increase_steps=50000, device='cpu'):
+        """
+        state: Integer of State Dimension
+        actions: Tuple of Subactions per Action
+        """
         self.state = state
         self.actions = actions
         self.shared = shared
@@ -204,9 +207,8 @@ class BDQ:
         self.optimizer = torch.optim.RMSprop(self.q_net.parameters(),  # Using RMSProp because it's more stable, not as aggressive than Adam
                                              lr=learning_rate, weight_decay=weight_decay)
         self.weight_decay = weight_decay
-        self.loss_function = nn.HuberLoss()
 
-        self.buffer = ReplayBuffer(buffer_size_max, state, alpha, beta, beta_increase_steps)
+        self.buffer = ReplayBuffer(state, len(actions), buffer_size_max, alpha, beta, beta_increase_steps)
         self.buffer_size_max = buffer_size_max
         self.buffer_size_min = buffer_size_min
         self.batch_size = batch_size
@@ -217,9 +219,9 @@ class BDQ:
 
         self.gamma = gamma  # Reward discount rate
 
-        # Linearly decay Learning Rate and Epsilon from start to min in a given amount of steps
         self.learning_rate = learning_rate
 
+        # Linearly decay Epsilon from start to min in a given amount of steps
         self.epsilon = epsilon_start
         self.epsilon_start = epsilon_start
         self.epsilon_decay = (epsilon_start - epsilon_min) / epsilon_decay_steps
@@ -241,23 +243,27 @@ class BDQ:
 
         self.optimizer = torch.optim.RMSprop(self.q_net.parameters(), lr=self.learning_rate, weight_decay=self.weight_decay)
 
-        self.buffer = ReplayBuffer(self.buffer_size_max, self.state_dim, self.alpha, self.beta, self.beta_increase_steps)
+        self.buffer = ReplayBuffer(self.state, len(self.actions), self.buffer_size_max, self.alpha, self.beta, self.beta_increase_steps)
 
         self.epsilon = self.epsilon_start
+
+        self.rng = np.random.default_rng()
     
     def act(self, state):
         """
         Decides on action based on current state using epsilon-greedy Policy.
         """
         if self.rng.random() < self.epsilon:
-            actions = self.rng.integers(self.actions, dtype=np.int16)  # Random
+            actions = self.rng.integers(self.actions, dtype=np.int64)  # Random
         else:
             state = tensor(state, device=self.device, dtype=torch.float32).unsqueeze(0)
-            qs = self.q_net(state).detach()
+            qs = self.q_net(state)
 
-            actions = np.empty(len(self.actions), dtype=np.int16)
+            actions = np.empty(len(self.actions), dtype=np.int64)
             for i, q in enumerate(qs):
-                actions[i] = q.unsqueeze(0).argmax().item()  # Greedy
+                actions[i] = q.detach().unsqueeze(0).argmax().item()  # Greedy
+
+        self._update_parameters()
 
         return actions
 
@@ -266,11 +272,11 @@ class BDQ:
         Decides on action based on current state using greedy Policy.
         """
         state = tensor(state, device=self.device, dtype=torch.float32).unsqueeze(0)
-        qs = self.q_net(state).detach()
+        qs = self.q_net(state)
 
-        actions = np.empty(len(self.actions), dtype=np.int16)
+        actions = np.empty(len(self.actions), dtype=np.int64)
         for i, q in enumerate(qs):
-            actions[i] = q.unsqueeze(0).argmax().item()
+            actions[i] = q.detach().unsqueeze(0).argmax().item()
 
         return actions
     
@@ -300,22 +306,22 @@ class BDQ:
             next_states = torch.from_numpy(next_states).to(self.device)
             terminals = torch.from_numpy(terminals).to(self.device)
 
-            qs = self.q_net(next_states).detach()
-            target_qs = self.target_q_net(next_states).detach()
+            qs = self.q_net(next_states)
+            target_qs = self.target_q_net(next_states)
 
-            target_qs = torch.empty((self.batch_size, len(self.actions)), device=self.device, dtype=torch.float32)
+            target_values = torch.empty((self.batch_size, len(self.actions)), device=self.device, dtype=torch.float32)
             for i, (q, target_q) in enumerate(zip(qs, target_qs)):
-                max_actions = q.argmax(-1).unsqueeze(-1)
-                max_action_qs = target_q.gather(-1, max_actions).squeeze()
-                target_qs[:, i] = max_action_qs
+                max_actions = q.detach().argmax(-1).unsqueeze(-1)
+                max_action_qs = target_q.detach().gather(-1, max_actions).squeeze()
+                target_values[:, i] = max_action_qs
 
-            mean_target_qs = target_qs.mean(-1)  # One Target for each 
-            targets = rewards + self.gamma * mean_target_qs * (1 - terminals)
+            mean_target_values = target_values.mean(-1)  # One Target for each 
+            targets = rewards + self.gamma * mean_target_values * (1 - terminals)
 
-            qs = self.q_net(states).gather(-1, actions.unsqueeze(1)).squeeze()
+            qs = self.q_net(states)
             predictions = torch.empty((self.batch_size, len(self.actions)), device=self.device, dtype=torch.float32)
             for i, q in enumerate(qs):
-                prediction = q.gather(-1, actions.unsqueeze(1)).squeeze()
+                prediction = q.gather(-1, actions[:, i].unsqueeze(1)).squeeze()
                 predictions[:, i] = prediction
 
             td_errors = targets.unsqueeze(1).expand_as(predictions) - predictions
@@ -335,8 +341,6 @@ class BDQ:
             errors = td_errors.detach().abs().sum(-1).cpu().numpy()  # Sum of absolute TD Errors used for Replay Prioritization
             self.buffer.update_experiences(indices, errors)  # Update replay buffer's temporal difference errors
 
-
-        self._update_parameters()
         self._update_target(self.tau)
     
     def save_net(self, path):
