@@ -190,7 +190,7 @@ class ReplayBuffer:
 class BDQ:
     def __init__(self, state, actions, shared=(512, 512), branch=(128, 128), gamma=0.99, learning_rate=0.0005,
                  weight_decay=0.0001, epsilon_start=1.0, epsilon_decay_steps=20000,
-                 epsilon_min=0.1, buffer_size_max=50000, buffer_size_min=1000,
+                 epsilon_min=0.1, new_actions_prob=0.05, buffer_size_max=50000, buffer_size_min=1000,
                  batch_size=50, replays=1, tau=0.01, alpha=0.6, beta=0.1, beta_increase_steps=50000, device='cpu'):
         """
         state: Integer of State Dimension
@@ -217,9 +217,12 @@ class BDQ:
         self.beta = beta
         self.beta_increase_steps = beta_increase_steps
 
+        # Can be calculated by exp(- dt / lookahead_horizon)
         self.gamma = gamma  # Reward discount rate
 
         self.learning_rate = learning_rate
+
+        self.rng = np.random.default_rng()
 
         # Linearly decay Epsilon from start to min in a given amount of steps
         self.epsilon = epsilon_start
@@ -227,11 +230,14 @@ class BDQ:
         self.epsilon_decay = (epsilon_start - epsilon_min) / epsilon_decay_steps
         self.epsilon_min = epsilon_min
 
+        # How many times per second on average a new action is chosen randomly (1 is regular e-greedy)
+        # Can be calculated by this formula: new_actions_per_second * dt
+        self.new_actions_prob = new_actions_prob
+        self.rand_actions = self.rng.integers(actions, dtype=np.int64)
+
         self.tau = tau  # Mixing parameter for polyak averaging
 
         self.device = device
-
-        self.rng = np.random.default_rng()
     
     def reset(self):
         """
@@ -252,16 +258,17 @@ class BDQ:
     def act(self, state):
         """
         Decides on action based on current state using epsilon-greedy Policy.
+        Random actions are correlated though. Every time there is a chance that
+        the random actions from last time are used again.
         """
         if self.rng.random() < self.epsilon:
-            actions = self.rng.integers(self.actions, dtype=np.int64)  # Random
-        else:
-            state = tensor(state, device=self.device, dtype=torch.float32).unsqueeze(0)
-            qs = self.q_net(state)
+            probs = self.new_actions_prob / self.epsilon  # Probability for new random action
+            is_rand = self.rng.random(len(self.actions)) < probs  # List of Booleans indicating which actions will be exchanged by random ones
+            self.rand_actions[is_rand] = self.rng.integers(self.actions, dtype=np.int64)[is_rand]
 
-            actions = np.empty(len(self.actions), dtype=np.int64)
-            for i, q in enumerate(qs):
-                actions[i] = q.detach().unsqueeze(0).argmax().item()  # Greedy
+            actions = self.rand_actions  # Random
+        else:
+            actions = self.act_optimally(state)  # Greedy
 
         self._update_parameters()
 
