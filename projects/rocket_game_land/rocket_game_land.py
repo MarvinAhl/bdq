@@ -13,7 +13,7 @@ import numpy as np
 from matplotlib import pyplot as plt
 
 class Game:
-    def __init__(self, render=True, agent_play=True, agent_train=True, agent_file='rocket_game_hover', save_episodes=100,
+    def __init__(self, render=True, agent_play=True, agent_train=True, agent_file='rocket_game_hover', save_episodes=100, eval_episodes=10,
                  step_limit=2000, device='cpu'):
         self.running = True
         self.display_surf = None
@@ -38,13 +38,11 @@ class Game:
                 self.agent.load_net('nets/' + agent_file + '.net')
         else:
             self.agent = None
-        
-        self.x_target = 0.0
-        self.y_target = -30.0
 
         self.last_shaping = None  # For potential based reward shaping
         
         self.save_episodes = save_episodes
+        self.eval_episodes = eval_episodes
         self.step_limit = step_limit
 
         self.render = render
@@ -108,26 +106,56 @@ class Game:
 
         state = self.rocket.update(dt)
 
-        # Oberservation is like state but only with relative positions
+        # Place to differntiate between shape and observation
         obsv = state.copy()
-        obsv[0] -= self.x_target
-        obsv[1] -= self.y_target
+
+        done = False
+
+        reward = 0.0 if actions[0] == 0 else -0.01  # Reward if booster is off or on
+
+        engine_on_ground = 0.0 <= (obsv[1] + self.rocket.l1 * np.cos(obsv[4]))
+        nose_on_ground = 0.0 <= (obsv[1] - self.rocket.l2 * np.cos(obsv[4]))
+        
+        out_of_bounds_left = obsv[0] < -(self.width/2 / physics.pixel_per_meter)
+        out_of_bounds_right = obsv[0] > (self.width/2 / physics.pixel_per_meter)
+        out_of_bounds_top = obsv[1] < -(self.height / physics.pixel_per_meter)
+
+        if out_of_bounds_left or out_of_bounds_right or out_of_bounds_top:
+            done = True
+            reward += -100.0  # Reward for flying out of bounds
+        elif engine_on_ground or nose_on_ground:
+            done = True
+
+            x_v_good = obsv[2] < 5.0 and obsv[2] > -5.0
+            y_v_good = obsv[3] < 10.0 and obsv[3] > -10.0
+            phi_good = obsv[4] < 0.2 and obsv[4] > -0.2
+            phi_v_good = obsv[5] < 0.4 and obsv[5] > -0.4
+
+            rocket_landed = x_v_good and y_v_good and phi_good and phi_v_good
+            if rocket_landed:
+                reward += 100.0  # Reward for landing
+
+                # Rewards for being on point
+                reward += self._gauss_reward(20.0, 3.0, 0.15, obsv[2])
+                reward += self._gauss_reward(20.0, 1.0, 0.15, obsv[3])
+                reward += self._gauss_reward(20.0, 0.1, 0.15, obsv[4])
+                reward += self._gauss_reward(20.0, 0.2, 0.15, obsv[5])
+            
+            else:
+                reward += -100.0
 
         shaping = self._calc_shaping(obsv)
-        reward = shaping - self.last_shaping
+        reward += shaping - self.last_shaping
         self.last_shaping = shaping
-
-        dist = np.sqrt(obsv[0]**2 + obsv[1]**2)
-        done = dist > 28.0
 
         return obsv, reward, done
 
     def _calc_shaping(self, state):
         # Square potentials scaled to have about the same impact
-        position = -0.06 * (state[0]**2 + state[1]**2)
-        velocity = -0.12 * (state[2]**2 + state[3]**2)
-        angle = -35.0 * state[4]**2
-        ang_vel = -35.0 * state[5]**2
+        position = -0.8 * np.sqrt(state[0]**2 + state[1]**2)
+        velocity = -1.7 * np.sqrt(state[2]**2 + state[3]**2)
+        angle = -5.0 * state[4]**2
+        ang_vel = -2 * state[5]**2
 
         # Scaled importance
         return position + velocity + angle + ang_vel
@@ -185,19 +213,20 @@ class Game:
         # Loop over all Episodes:
         while self.running:
             episode += 1
+
+            if self.agent_play and self.agent_train and episode % self.eval_episodes == 0:
+                self._evaluate()
+
             print(f'Episode {episode} started')
 
             state, done = self.rocket.reset(), False
 
             obsv = state.copy()
-            obsv[0] -= self.x_target
-            obsv[1] -= self.y_target
 
             self.last_shaping = self._calc_shaping(obsv)  # Calculate initial potential
 
             episode_reward = 0.0
             step_count = 0
-            greedy_count = 0
 
             self._init_time()
             # Loop for one Episode:
@@ -318,6 +347,9 @@ class Game:
 
         self._cleanup()
     
+    def _evaluate(self):
+        pass  # Evaluation yet to be implemented
+    
     def _init_time(self):
         self.old_time_ms = pygame.time.get_ticks()
 
@@ -331,9 +363,21 @@ class Game:
         if d_d_time_ms > 0:
             pygame.time.delay(d_d_time_ms)
 
+    def _gauss_reward(self, a, b, c, x):
+        """
+        Calculate unnormalized Gauss Curve with maximum height of a at x=0 that
+        decays to c*a at x=b. Return value at point x. Is used for the reward function.
+        """
+        temp = np.sqrt(-np.log(c**2))
+        alpha = np.sqrt(2*np.pi) * a * b / temp
+        sigma = b / temp
+
+        return alpha / sigma / np.sqrt(2*np.pi) * np.exp(-x**2 / 2 / sigma**2)
+
+
 if __name__ == '__main__':
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     print(f'Using device {device}')
 
-    game = Game(render=True, agent_play=True, agent_train=False, agent_file='rocket_game_hover_e753', save_episodes=100, step_limit=2000, device=device)
+    game = Game(render=True, agent_play=True, agent_train=True, agent_file='rocket_game_land', save_episodes=100, step_limit=2000, device=device)
     game.play()
