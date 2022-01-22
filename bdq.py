@@ -191,7 +191,7 @@ class BDQ:
     def __init__(self, state, actions, shared=(512, 512), branch=(128, 128), gamma=0.99, learning_rate=0.0005,
                  weight_decay=0.0001, epsilon_start=1.0, epsilon_decay_steps=20000,
                  epsilon_min=0.1, new_actions_prob=0.05, buffer_size_max=50000, buffer_size_min=1000,
-                 batch_size=50, replays=1, tau=0.01, alpha=0.6, beta=0.1, beta_increase_steps=50000, device='cpu'):
+                 batch_size=64, replays=1, tau=0.01, alpha=0.6, beta=0.1, beta_increase_steps=50000, device='cpu'):
         """
         state: Integer of State Dimension
         actions: Tuple of Subactions per Action
@@ -235,7 +235,7 @@ class BDQ:
         self.new_actions_prob = new_actions_prob
         self.rand_actions = self.rng.integers(actions, dtype=np.int64)
 
-        self.tau = tau  # Mixing parameter for polyak averaging
+        self.tau = tau  # Mixing parameter for polyak averaging of target and online network
 
         self.device = device
     
