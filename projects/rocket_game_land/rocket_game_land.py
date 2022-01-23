@@ -13,7 +13,7 @@ import numpy as np
 from matplotlib import pyplot as plt
 
 class Game:
-    def __init__(self, render=True, agent_play=True, agent_train=True, agent_file='rocket_game_land', save_episodes=100, eval_episodes=10,
+    def __init__(self, render=True, agent_play=True, agent_train=True, agent_file='rocket_game_land', save_episodes=100, eval_every_episodes=10, eval_episodes=10,
                  step_limit=2000, device='cpu'):
         self.running = True
         self.display_surf = None
@@ -42,6 +42,7 @@ class Game:
         self.last_shaping = None  # For potential based reward shaping
         
         self.save_episodes = save_episodes
+        self.eval_every_episodes = eval_every_episodes
         self.eval_episodes = eval_episodes
         self.step_limit = step_limit
 
@@ -207,6 +208,7 @@ class Game:
         episode_rewards = []
         steps = []
         final_obsvs = []
+        eval_rewards = []
 
         episode = 0
 
@@ -214,8 +216,9 @@ class Game:
         while self.running:
             episode += 1
 
-            if self.agent_play and self.agent_train and episode % self.eval_episodes == 0:
-                self._evaluate()
+            if self.agent_play and self.agent_train and episode % self.eval_every_episodes == 0:
+                eval_reward = self._evaluate()
+                eval_rewards.append(eval_reward)
 
             print(f'Episode {episode} started')
 
@@ -279,10 +282,9 @@ class Game:
             steps.append(overall_steps)
             final_obsvs.append(obsv)
 
-            if (episode % self.save_episodes == 0 or not self.running) and self.agent_play:
-                # Save Net if agent was trained
-                if self.agent_train:
-                    self.agent.save_net('nets/' + self.agent_file + f'_e{episode}' + '.net')
+            # Print training stats
+            if (episode % self.save_episodes == 0 or not self.running) and self.agent_play and self.agent_train:
+                self.agent.save_net('nets/' + self.agent_file + f'_e{episode}' + '.net')
 
                 # Plot results
                 plt.clf()  # To prevent overlapping of old plots
@@ -305,8 +307,7 @@ class Game:
                 axis[2].set_ylabel('Cumulative Steps')
                 axis[2].set_xlabel('Episodes')
 
-                prefix = 'train' if self.agent_train else 'eval'
-                plt.savefig('stats/' + prefix + f'_stats_e{episode}.png')
+                plt.savefig('stats/' + f'train_stats_e{episode}.png')
 
                 plt.close(figure)
 
@@ -339,16 +340,51 @@ class Game:
                 axis[2, 1].grid(True)
                 axis[2, 1].set_xlabel('Episodes')
 
-                plt.savefig('stats/' + prefix + f'_final_obsvs_e{episode}.png')
+                plt.savefig('stats/' + f'train_final_obsvs_e{episode}.png')
 
                 plt.close(figure)
+
+                plt.clf()
+
+                plt.plot((np.arange(len(eval_rewards))+1) * self.eval_every_episodes, eval_rewards, 'k-')
+                plt.grid(True)
+                plt.title(f'Evaluation Results every {self.eval_every_episodes} episodes for {self.eval_episodes} using Greedy Policy')
+                plt.xlabel('Episodes')
+                plt.ylabel('Reward')
+
+                plt.savefig('stats/' + f'train_eval_rewards_e{episode}.png')
 
                 print(f'Episode {episode} saved')
 
         self._cleanup()
     
     def _evaluate(self):
-        pass  # Evaluation yet to be implemented
+        overall_reward = 0.0
+        for _ in range(self.eval_episodes):
+            episode_reward, step_count = 0.0, 0
+            state, done = self.rocket.reset(), False
+            obsv = state.copy()
+
+            self.last_shaping = self._calc_shaping(obsv)  # Calculate initial potential
+
+            self._init_time()
+            # Loop for one Episode:
+            while self.running and not done:
+                dt = 0.01  # Will always calculate 100 steps per second, even if realtime simulation is slower
+                actions = self.agent.act_optimally(obsv)
+                next_obsv, reward, done = self._update(dt, actions)
+                obsv = next_obsv
+
+                episode_reward += reward
+                step_count += 1
+
+                # Stop Episode if time limit is reached
+                if step_count >= self.step_limit:
+                    done = True
+            
+            overall_reward += episode_reward
+        return overall_reward / self.eval_episodes
+
     
     def _init_time(self):
         self.old_time_ms = pygame.time.get_ticks()
