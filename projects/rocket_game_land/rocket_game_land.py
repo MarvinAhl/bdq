@@ -350,7 +350,7 @@ class Game:
 
                 plt.plot((np.arange(len(eval_rewards))+1) * self.eval_every_episodes, eval_rewards, 'k-')
                 plt.grid(True)
-                plt.title(f'Evaluation Results every {self.eval_every_episodes} episodes for {self.eval_episodes} using Greedy Policy')
+                plt.title(f'Evaluation Results every {self.eval_every_episodes} episodes for {self.eval_episodes} Runs using Greedy Policy')
                 plt.xlabel('Episodes')
                 plt.ylabel('Reward')
 
@@ -417,5 +417,5 @@ if __name__ == '__main__':
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     print(f'Using device {device}')
 
-    game = Game(render=True, agent_play=True, agent_train=True, agent_file='rocket_game_land', save_episodes=100, step_limit=2000, device=device)
+    game = Game(render=True, agent_play=True, agent_train=True, agent_file='rocket_game_land', step_limit=2000, device=device)
     game.play()
