@@ -13,7 +13,7 @@ import numpy as np
 from matplotlib import pyplot as plt
 
 class Game:
-    def __init__(self, render=True, agent_play=True, agent_train=True, agent_file='rocket_game_hover', save_episodes=100, eval_episodes=10,
+    def __init__(self, render=True, agent_play=True, agent_train=True, agent_file='rocket_game_land', save_episodes=100, eval_episodes=10,
                  step_limit=2000, device='cpu'):
         self.running = True
         self.display_surf = None
