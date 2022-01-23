@@ -112,7 +112,7 @@ class Game:
 
         done = False
 
-        reward = 0.0 if not self.agent_play or actions[0] == 0 else -0.01  # Reward if booster is off or on
+        reward = 0.0 if not self.agent_play or actions[0] == 0 else -0.02  # Reward if booster is off or on
 
         engine_on_ground = 0.0 <= (obsv[1] + self.rocket.l1 * np.cos(obsv[4]))
         nose_on_ground = 0.0 <= (obsv[1] - self.rocket.l2 * np.cos(obsv[4]))
@@ -137,6 +137,8 @@ class Game:
                 reward += 100.0  # Reward for landing
 
                 # Rewards for being on point
+                on_pad = obsv[0] < 10.0 and obsv[0] > -10.0
+                reward += self._gauss_reward(30.0, 10.0, 0.4, obsv[0]) if on_pad else 0.0
                 reward += self._gauss_reward(20.0, 3.0, 0.15, obsv[2])
                 reward += self._gauss_reward(20.0, 1.0, 0.15, obsv[3])
                 reward += self._gauss_reward(20.0, 0.1, 0.15, obsv[4])
@@ -415,5 +417,5 @@ if __name__ == '__main__':
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     print(f'Using device {device}')
 
-    game = Game(render=True, agent_play=True, agent_train=False, agent_file='rocket_game_land_e100', save_episodes=100, step_limit=2000, device=device)
+    game = Game(render=True, agent_play=True, agent_train=True, agent_file='rocket_game_land', save_episodes=100, step_limit=2000, device=device)
     game.play()

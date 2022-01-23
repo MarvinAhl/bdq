@@ -1,0 +1,24 @@
+Net:
+State: 6
+Actions: (2, 5, 3)
+Shared: (512, 512)
+Branch: (128, 128)
+
+Training for 3081 Episodes over night on GTX 1070
+
+Turned out a lot better than I expected for the first time but BDQ with
+time correlated randomness in e-greedy seems to be doing the job! It actally lands successfully
+most of the time from about episode 400 on. Which is not a lot!
+
+A few changes will be done to reward function though:
+Reward for landing on pad. There is not reward other than the shaping for landing successfully
+on pad so that's gonna be added.
+Slightly increased fuel cost because sometimes it is good but then hovers for an eternety before
+finally touching down. Increasing from -0.01 to -0.02.
+
+Hyperparameters seem to be doing great so no changes there. Only changed up the randomness
+to the exploration strategy a little. Now actions can independently be random and not
+everything random or everything optimal at once.
+
+Control nozzles seem to have a little too much power, it shouldn't rely on them too much,
+I will train one without them in the future but for now they are fine.
