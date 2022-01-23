@@ -258,17 +258,20 @@ class BDQ:
     def act(self, state):
         """
         Decides on action based on current state using epsilon-greedy Policy.
+        Choses if action is random for each action individually.
         Random actions are correlated though. Every time there is a chance that
         the random actions from last time are used again.
         """
-        if self.rng.random() < self.epsilon:
-            probs = self.new_actions_prob / self.epsilon  # Probability for new random action
-            is_rand = self.rng.random(len(self.actions)) < probs  # List of Booleans indicating which actions will be exchanged by random ones
-            self.rand_actions[is_rand] = self.rng.integers(self.actions, dtype=np.int64)[is_rand]
+        actions = self.act_optimally(state)  # Greedy actions
 
-            actions = self.rand_actions  # Random
-        else:
-            actions = self.act_optimally(state)  # Greedy
+        is_rand = self.rng.random(len(self.actions)) < self.epsilon  # List of Booleans indicating which actions will be random
+
+        probs_new = self.new_actions_prob / self.epsilon  # Probability for new random action
+        is_new = self.rng.random(len(self.actions)) < probs_new  # List of Booleans indicating which random actions will be exchanged by new ones
+
+        self.rand_actions[is_rand * is_new] = self.rng.integers(self.actions, dtype=np.int64)[is_rand * is_new]  # Generate new random actions
+
+        actions[is_rand] = self.rand_actions[is_rand]  # Make some actions random
 
         self._update_parameters()
 
