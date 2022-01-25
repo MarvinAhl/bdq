@@ -15,12 +15,12 @@ class Rocket:
     
     def reset(self):
         # Coordinates are relative to landing pad in the bottom middle of the screen, y is pointing down
-        self.x = (np.random.rand() * 2.0 - 1.0) * 50.0
+        self.x = self.rng.normal(0.0, 20.0)
         self.y = -60.0
-        self.phi = -self.x / 100.0 + (np.random.rand() * 2.0 - 1.0) * 0.25
+        self.phi = -self.x / 100.0 + self.rng.normal(0.0, 0.125)
 
         self.x_v = 0.0
-        self.y_v = 30.0
+        self.y_v = 30.0 + self.rng.normal(0.0, 5.0)
         self.phi_v = 0.0
         
         self.f1 = 0.0

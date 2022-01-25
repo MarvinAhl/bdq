@@ -13,7 +13,7 @@ import numpy as np
 from matplotlib import pyplot as plt
 
 class Game:
-    def __init__(self, render=True, agent_play=True, agent_train=True, agent_file='rocket_game_land', save_episodes=100, eval_every_episodes=10, eval_episodes=10,
+    def __init__(self, render=True, agent_play=True, agent_train=True, agent_file='rocket_game_land', save_episodes=100, eval_every_episodes=25, eval_episodes=25,
                  step_limit=2000, device='cpu'):
         self.running = True
         self.display_surf = None
@@ -121,18 +121,21 @@ class Game:
         out_of_bounds_right = obsv[0] > (self.width/2 / physics.pixel_per_meter)
         out_of_bounds_top = obsv[1] < -(self.height / physics.pixel_per_meter)
 
+        flying_upwards = obsv[3] < 0.0
+
         if out_of_bounds_left or out_of_bounds_right or out_of_bounds_top:
             done = True
             reward += -100.0  # Reward for flying out of bounds
         elif engine_on_ground or nose_on_ground:
             done = True
 
+            x_good = obsv[0] < 10.0 and obsv[1] > 10.0  # Landing on pad
             x_v_good = obsv[2] < 5.0 and obsv[2] > -5.0
             y_v_good = obsv[3] < 10.0 and obsv[3] > -10.0
             phi_good = obsv[4] < 0.2 and obsv[4] > -0.2
             phi_v_good = obsv[5] < 0.4 and obsv[5] > -0.4
 
-            rocket_landed = x_v_good and y_v_good and phi_good and phi_v_good
+            rocket_landed = x_good and x_v_good and y_v_good and phi_good and phi_v_good
             if rocket_landed:
                 reward += 100.0  # Reward for landing
 
@@ -146,6 +149,9 @@ class Game:
             
             else:
                 reward += -100.0
+        elif flying_upwards:
+            done = True
+            reward += -100.0  # Flying upwards is not permitted due to waste of fuel
 
         shaping = self._calc_shaping(obsv)
         reward += shaping - self.last_shaping
@@ -417,5 +423,5 @@ if __name__ == '__main__':
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     print(f'Using device {device}')
 
-    game = Game(render=True, agent_play=True, agent_train=True, agent_file='rocket_game_land', step_limit=2000, device=device)
+    game = Game(render=True, agent_play=True, agent_train=False, agent_file='rocket_game_land_e4000', step_limit=2000, device=device)
     game.play()

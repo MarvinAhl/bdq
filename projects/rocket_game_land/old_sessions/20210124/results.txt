@@ -1,0 +1,19 @@
+Net:
+State: 6
+Actions: (2, 5, 3)
+Shared: (512, 512)
+Branch: (128, 128)
+
+Training for 9643 Episodes for over 24h on GTX 1070
+
+Turned out about as good as ne last one. Still mostly landet off pad.
+Later policies didn't add anything interesting. Solid performance anyways.
+
+Greatest weakness is landing off pad and flying up again. Soft Rewards didn't help
+so I will end the episode as a failure when the y velocity is negative (flying upwards)
+or touchdown is not in the landing zone.
+
+Furthermore I will try to increase stability by adding some randomness to the initial
+downwards velocity. Random spawn x-Point is now also determined by normal 
+distribution because coming in from the extreme sides of the screen is actually just
+supposed to be an edge case. Making NN a little bigger by the way.
