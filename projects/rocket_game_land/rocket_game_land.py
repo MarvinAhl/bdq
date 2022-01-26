@@ -422,5 +422,5 @@ if __name__ == '__main__':
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     print(f'Using device {device}')
 
-    game = Game(render=True, agent_play=True, agent_train=True, agent_file='rocket_game_land', step_limit=2000, device=device)
+    game = Game(render=True, agent_play=True, agent_train=False, agent_file='rocket_game_land_e1800', step_limit=2000, device=device)
     game.play()

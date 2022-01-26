@@ -1,0 +1,23 @@
+Net:
+State: 6
+Actions: (2, 5, 3)
+Shared: (512, 512)
+Branch: (128, 128)
+
+Training for 4788 Episodes over night on GTX 1070
+
+System is performing really well right now. Always landing on pad and not hovering really improved performance and
+made training a little harder too. It reached its peak performance in terms of reward at episode 500 but as always there
+is still some improvement happening because overall reward is not everything.
+
+Starts out learning fine. Peaks at Episode 600. Then there is noticable decay in performance happening. Another good
+policy at 1500. Another performance peak at Episode 1900. Probably the best till then. Sometimes hovers awkwardly
+but at least doesnt slam the pad to hard. 3000 is also good but sometimes, even in simple situations, it just performs
+horribly. The later ones are getting super aggressive. To aggressive to be robust and only having such a good average
+performance because they get really good scores sometimes. 4788 looking quite good again but sometimes its hovering a bit too much.
+
+Overall winner is 1900. It can even perform a lite Starship Belly-Flip Maneuvre, just set:
+x = -30
+y = -60
+phi = 1.0
+y_v = 30
